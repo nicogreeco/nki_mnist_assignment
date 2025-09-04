@@ -13,31 +13,41 @@ from sklearn.manifold import TSNE
 from sklearn.cluster import k_means
 
 from network import SmallBackbone, ClassifierHead, SmallCNN
+from mlp import MLP
 
 def embed_val_given_ckpt_path(
     ckpt_path: str = "log/lightning_logs/version_1/checkpoints/best-epoch=39-val_loss=0.0433.ckpt", 
+    _model: str = 'cnn', 
     config_path: str = "config.yaml"):
     
     config = OmegaConf.load(config_path)
-
+    
     # initialize model
-    backbone = SmallBackbone(
-        num_channels_1=config.model.num_channels_1, 
-        num_channels_2=config.model.num_channels_1, 
-        emb_dim=config.model.emb_dim, 
-        p=config.model.dropout)
+    if _model == 'cnn':
+        print('Loading SmallCNN')
+        backbone = SmallBackbone(
+            num_channels_1=config.model.num_channels_1, 
+            num_channels_2=config.model.num_channels_1, 
+            emb_dim=config.model.emb_dim, 
+            p=config.model.dropout)
 
-    head = ClassifierHead(
-        emb_dim=config.model.emb_dim, 
-        num_classes=10, 
-        p=config.model.dropout)
+        head = ClassifierHead(
+            emb_dim=config.model.emb_dim, 
+            num_classes=10, 
+            p=config.model.dropout)
 
-    model = SmallCNN.load_from_checkpoint(
-        checkpoint_path=ckpt_path,
-        backbone=backbone,
-        head=head)
-    model.eval()
-
+        model = SmallCNN.load_from_checkpoint(
+            checkpoint_path=ckpt_path,
+            backbone=backbone,
+            head=head)
+        model.eval()
+        
+    elif _model == 'mlp':
+        print('Loading MLP')
+        model = MLP.load_from_checkpoint(
+        checkpoint_path=ckpt_path)
+        model.eval()
+        
     # load val dataset
     val_transform = transforms.Compose([
         transforms.ToTensor(),
@@ -67,7 +77,7 @@ def embed_val_given_ckpt_path(
     with torch.no_grad():
         for idx, batch in enumerate(val_loader):
             data, labels = batch
-            embeddings = model.backbone(data)
+            embeddings = model.encode(data)
             all_embeddings.append(embeddings)
             all_labels.append(labels)
 
@@ -79,10 +89,11 @@ def embed_val_given_ckpt_path(
 def tsne_and_cluster_from_ckpt(    
     ckpt_dir: str = "log/lightning_logs/version_1/checkpoints/",
     ckpt_file: str = "best-epoch=39-val_loss=0.0433.ckpt", 
+    model: str = 'cnn',
     config_path: str = "config.yaml"):
     
     ckpt_path = os.path.join(ckpt_dir, ckpt_file)
-    embeddings, labels = embed_val_given_ckpt_path(ckpt_path, config_path)
+    embeddings, labels = embed_val_given_ckpt_path(ckpt_path, model, config_path)
     
     tsne = TSNE(
         n_components=2, 

@@ -12,6 +12,6 @@ data:
   rotation: 15
 
 training:
-  max_epochs: 80
-  patience: 5
+  max_epochs: 160
+  patience: 10
   every_n_epochs: 1

@@ -1,4 +1,3 @@
-# Lightning 2.x
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
