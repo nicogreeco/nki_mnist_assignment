@@ -47,7 +47,7 @@ def main(config):
 
     # training
     logger = TensorBoardLogger(
-        save_dir='./models/', 
+        save_dir='./log/', 
         version=1,
         name="lightning_logs"
     )
@@ -69,10 +69,10 @@ def main(config):
 
     trainer = L.Trainer( 
                 callbacks=[checkpoint_callback, every_epoch_callback, early_stopping_callback], 
-                max_epochs=config.training.max_epochs, 
+                max_epochs=config.training.max_epochs,
                 logger=logger)
     
-    trainer.fit(model=smallCNN, train_dataloaders=train_loader, val_dataloaders=val_loader)
+    trainer.fit(model=smallCNN, train_dataloaders=train_loader, val_dataloaders=val_loader, limit_train_batches=0.25)
     
 if __name__ == '__main__':
     parser = ArgumentParser()
