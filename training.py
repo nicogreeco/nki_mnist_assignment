@@ -70,9 +70,10 @@ def main(config):
     trainer = L.Trainer( 
                 callbacks=[checkpoint_callback, every_epoch_callback, early_stopping_callback], 
                 max_epochs=config.training.max_epochs,
-                logger=logger)
+                logger=logger, 
+                limit_train_batches=0.25)
     
-    trainer.fit(model=smallCNN, train_dataloaders=train_loader, val_dataloaders=val_loader, limit_train_batches=0.25)
+    trainer.fit(model=smallCNN, train_dataloaders=train_loader, val_dataloaders=val_loader)
     
 if __name__ == '__main__':
     parser = ArgumentParser()
