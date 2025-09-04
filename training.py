@@ -1,33 +1,34 @@
 from argparse import ArgumentParser
 from omegaconf import OmegaConf
+import torch
 from torch import nn
 import lightning as L
-from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
+from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping, LearningRateMonitor
 from lightning.pytorch.loggers import TensorBoardLogger
 from torchvision import datasets
 from torchvision import transforms
 import matplotlib.pyplot as plt
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import Subset, DataLoader, random_split
 
 from network import SmallBackbone, ClassifierHead, SmallCNN
 
 def main(config):
     
     # initialize model
-    encoder = SmallBackbone(
+    backbone = SmallBackbone(
         num_channels_1=config.model.num_channels_1, 
         num_channels_2=config.model.num_channels_1, 
         emb_dim=config.model.emb_dim, 
         p=config.model.dropout)
     
-    decoder = ClassifierHead(
+    head = ClassifierHead(
         emb_dim=config.model.emb_dim, 
         num_classes=10, 
         p=config.model.dropout)
     
     smallCNN = SmallCNN(
-        encoder, 
-        decoder, 
+        backbone, 
+        head, 
         lr=config.model.lr)
 
     # setup data
@@ -38,12 +39,37 @@ def main(config):
         transforms.Normalize((0.1307,), (0.3081,))
     ])
 
-    full_train = datasets.MNIST('./data/', download=True, train=True, transform=train_transform)
-    train_dataset, val_dataset = random_split(full_train, [50000, 10000])
+    val_transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.1307,), (0.3081,))
+    ])
 
-    train_loader = DataLoader(train_dataset, batch_size=config.data.batch_size, shuffle=True, num_workers=config.data.num_workers, pin_memory=True)
-    val_loader   = DataLoader(val_dataset, batch_size=config.data.batch_size, num_workers=config.data.num_workers, pin_memory=True)
+    full_train_aug = datasets.MNIST("./data/", download=True, train=True, transform=train_transform)
+    full_train_val = datasets.MNIST("./data/", download=True, train=True, transform=val_transform)
 
+    split = torch.load("data/MNIST/train_val_split.pt")
+    train_idx, val_idx = split["train_idx"], split["val_idx"]
+
+    train_dataset = Subset(full_train_aug, train_idx)
+    val_dataset = Subset(full_train_val, val_idx)
+
+    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=2, pin_memory=True)
+    val_loader = DataLoader(val_dataset,   batch_size=64, shuffle=False, num_workers=2, pin_memory=True)
+
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=config.data.batch_size, 
+        shuffle=True, 
+        num_workers=config.data.num_workers, 
+        pin_memory=True, 
+        persistent_workers=True)
+    
+    val_loader = DataLoader(
+        val_dataset, 
+        batch_size=config.data.batch_size, 
+        num_workers=config.data.num_workers, 
+        pin_memory=True, 
+        persistent_workers=True)
 
     # training
     logger = TensorBoardLogger(
@@ -67,11 +93,13 @@ def main(config):
 
     early_stopping_callback = EarlyStopping(monitor="val_loss", patience = config.training.patience)
 
+    # lr_monitor = LearningRateMonitor(logging_interval="epoch")
+
     trainer = L.Trainer( 
                 callbacks=[checkpoint_callback, every_epoch_callback, early_stopping_callback], 
                 max_epochs=config.training.max_epochs,
                 logger=logger, 
-                limit_train_batches=0.25)
+                limit_train_batches=0.20)
     
     trainer.fit(model=smallCNN, train_dataloaders=train_loader, val_dataloaders=val_loader)
     

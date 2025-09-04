@@ -3,7 +3,7 @@ model:
   num_channels_2: 16
   emb_dim: 128
   dropout: 0.25
-  lr: 0.001
+  lr: 0.0005
 
 data:
   batch_size: 64
@@ -12,6 +12,6 @@ data:
   rotation: 15
 
 training:
-  max_epochs: 20
-  patience: 2
+  max_epochs: 80
+  patience: 5
   every_n_epochs: 1
