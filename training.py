@@ -53,9 +53,6 @@ def main(config):
     train_dataset = Subset(full_train_aug, train_idx)
     val_dataset = Subset(full_train_val, val_idx)
 
-    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=2, pin_memory=True)
-    val_loader = DataLoader(val_dataset,   batch_size=64, shuffle=False, num_workers=2, pin_memory=True)
-
     train_loader = DataLoader(
         train_dataset, 
         batch_size=config.data.batch_size, 
