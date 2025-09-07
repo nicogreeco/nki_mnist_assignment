@@ -10,14 +10,14 @@ from torchvision import transforms
 import matplotlib.pyplot as plt
 from torch.utils.data import Subset, DataLoader, random_split
 
-from network import SmallBackbone, ClassifierHead, SmallCNN
+from cnn import SmallBackbone, ClassifierHead, SmallCNN
 
 def main(config):
     
     # initialize model
     backbone = SmallBackbone(
         num_channels_1=config.model.num_channels_1, 
-        num_channels_2=config.model.num_channels_1, 
+        num_channels_2=config.model.num_channels_2, 
         emb_dim=config.model.emb_dim, 
         p=config.model.dropout)
     

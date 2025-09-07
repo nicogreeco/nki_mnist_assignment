@@ -13,5 +13,5 @@ data:
 
 training:
   max_epochs: 160
-  patience: 10
+  patience: 5
   every_n_epochs: 1

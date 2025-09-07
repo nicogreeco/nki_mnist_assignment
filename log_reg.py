@@ -10,7 +10,7 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from utils import embed_val_given_ckpt_path
 
 def main(args):
-    X, y = embed_val_given_ckpt_path(args.ckpt_path, args.model)
+    X, y = embed_val_given_ckpt_path(args.ckpt_path, args.model, dataset='val')
 
     clf = LogisticRegression(
         random_state=0,
