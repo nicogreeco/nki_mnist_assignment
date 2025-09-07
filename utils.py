@@ -1,6 +1,9 @@
 import numpy as np
 import pandas as pd
 import altair as alt
+from PIL import Image
+import base64
+import io
 import os
 from typing import Union
 import matplotlib.pyplot as plt
@@ -11,6 +14,7 @@ from torchvision import transforms
 from torch.utils.data import DataLoader, Subset
 from sklearn.manifold import TSNE
 from sklearn.cluster import k_means
+from sklearn.decomposition import PCA
 
 from cnn import SmallBackbone, ClassifierHead, SmallCNN
 from mlp import MLP
@@ -137,22 +141,36 @@ def tsne_and_cluster_from_ckpt(
         n_clusters=10,
         n_init=5)
     
-    return embeddings, labels, tsne, clusters
-
-## Plotting functions
-
-def plot_tsne(
-    embeddings: Union[np.ndarray, torch.Tensor], 
-    labels: Union[np.ndarray, torch.Tensor]):
+    k_means_acc, y_pred = cluster_majority_vote_accuracy(labels, clusters)    
     
-    plt.figure(figsize=(8, 8))
-    scatter = plt.scatter(embeddings[:, 0], embeddings[:, 1], c=labels, cmap="tab10", s=5, alpha=0.7)
-    plt.legend(*scatter.legend_elements(), title="Classes", loc="best", bbox_to_anchor=(1,1))
-    plt.title("t-SNE")
-    plt.show()
+    return embeddings, labels, tsne, clusters, k_means_acc
 
-def get_test_accuracy(ckpt_path: str, _model: str, config_path: str):
-    """Get test accuracy for a given checkpoint"""
+def cluster_majority_vote_accuracy(labels, clusters):
+    def _to_numpy(x):
+        if hasattr(x, "detach"):
+            return x.detach().cpu().numpy()
+        return np.asarray(x)
+
+    y = _to_numpy(labels).ravel()
+    c = _to_numpy(clusters).ravel()
+
+    mapping = {}
+    for cid in np.unique(c):
+        mask = c == cid
+        if not np.any(mask):
+            continue
+        vals, counts = np.unique(y[mask], return_counts=True)
+        mapping[cid] = vals[np.argmax(counts)]
+
+    y_pred = np.array([mapping.get(cid, -1) for cid in c])
+    acc = float((y_pred == y).mean())
+    return acc, y_pred
+
+def get_test_accuracy(
+    ckpt_path: str, 
+    _model: str, 
+    config_path: str):
+
     config = OmegaConf.load(config_path)
     
     if '_dim_' in ckpt_path:
@@ -204,6 +222,18 @@ def get_test_accuracy(ckpt_path: str, _model: str, config_path: str):
     accuracy = 100 * correct / total
     return accuracy
 
+## Plotting functions
+
+def plot_tsne(
+    embeddings: Union[np.ndarray, torch.Tensor], 
+    labels: Union[np.ndarray, torch.Tensor]):
+    
+    plt.figure(figsize=(8, 8))
+    scatter = plt.scatter(embeddings[:, 0], embeddings[:, 1], c=labels, cmap="tab10", s=5, alpha=0.7)
+    plt.legend(*scatter.legend_elements(), title="Classes", loc="best", bbox_to_anchor=(1,1))
+    plt.title("t-SNE")
+    plt.show()
+
 def interactive_tsne_over_checkpoints(
     ckpt_dir: str,
     ckpt_files: list[str],
@@ -219,6 +249,7 @@ def interactive_tsne_over_checkpoints(
     
     dfs = []
     accuracies = {}
+    kmeans_accuracies = {}
 
     for i, ckpt_file in enumerate(ckpt_files):
         ckpt_path = os.path.join(ckpt_dir, ckpt_file)
@@ -228,12 +259,13 @@ def interactive_tsne_over_checkpoints(
         accuracies[i] = test_acc
         
         # extract embeddigs, cluster and tsne
-        embeddings, labels, tsne, clusters = tsne_and_cluster_from_ckpt(
+        embeddings, labels, tsne, clusters, k_means_acc = tsne_and_cluster_from_ckpt(
             ckpt_dir=ckpt_dir,
             ckpt_file=ckpt_file,
             model=_model,
             config_path=config_path,
         )
+        kmeans_accuracies[i] = k_means_acc 
 
         X = np.asarray(tsne)
         c = np.asarray(clusters).astype(int)
@@ -255,7 +287,7 @@ def interactive_tsne_over_checkpoints(
 
     alt.data_transformers.disable_max_rows()
 
-    # Parameters: color toggle and checkpoint slider
+    # color toggle and checkpoint slider
     color_toggle = alt.param(
         name="color_by",
         value="cluster",
@@ -268,7 +300,6 @@ def interactive_tsne_over_checkpoints(
         bind=alt.binding_range(min=0, max=len(ckpt_files) - 1, step=1, name="Checkpoint: "),
     )
 
-    # Points layer: color depends on toggle; filter depends on slider
     points = (
         alt.Chart(df_all)
         .transform_calculate(
@@ -281,44 +312,52 @@ def interactive_tsne_over_checkpoints(
             y=alt.Y("y:Q", axis=alt.Axis(title="t-SNE 2")),
             color=alt.Color("color:N", legend=alt.Legend(title="Color")),
             tooltip=[
-                alt.Tooltip("ckpt:N", title="Checkpoint"),
-                alt.Tooltip("test_accuracy:Q", title="Test Accuracy", format=".2f"),
+                # alt.Tooltip("ckpt:N", title="Checkpoint"),
+                # alt.Tooltip("test_accuracy:Q", title="Test Accuracy", format=".2f"),
                 alt.Tooltip("cluster:N", title="Cluster"),
                 alt.Tooltip("label:N", title="Label"),
-                alt.Tooltip("x:Q", format=".2f"),
-                alt.Tooltip("y:Q", format=".2f"),
+                # alt.Tooltip("x:Q", format=".2f"),
+                # alt.Tooltip("y:Q", format=".2f"),
             ],
             size=alt.value(point_size),
         )
         .add_params(color_toggle, ckpt_slider)
     )
     
-    # Create a small DataFrame for the accuracy text
+    # small DataFrame for the accuracy
     acc_df = pd.DataFrame([
-        {"ckpt_idx": i, "test_accuracy": acc, "ckpt": ckpt_files[i]} 
-        for i, acc in accuracies.items()
+        {
+            "ckpt_idx": i,
+            "ckpt": ckpt_files[i],
+            "test_text": f"Test acc: {accuracies[i]:.2f}",
+            "kmeans_text": f"k-means acc: {kmeans_accuracies[i]:.2f}",
+        }
+        for i in accuracies.keys()
     ])
     
     accuracy_text = (
         alt.Chart(acc_df)
         .transform_filter("datum.ckpt_idx == ckpt_idx")
-        .mark_text(
-            align="right",
-            baseline="top",
-            dx=-10,  # offset from right edge
-            dy=10,   # offset from top edge
-            fontSize=14,
-            fontWeight="bold",
-            color="black"
-        )
+        .mark_text(align="right", baseline="top", dx=-10, dy=10, fontSize=14, fontWeight="bold", color="black")
         .encode(
-            x=alt.value(690),  # position near right edge of 700px width
-            y=alt.value(10),   # position near top
-            text=alt.Text("test_accuracy:Q", format=".2f", formatType="number"),
+            x=alt.value(690),
+            y=alt.value(10),
+            text=alt.Text("test_text:N"),
         )
     )
 
-    chart = points + accuracy_text
+    kmeans_text = (
+        alt.Chart(acc_df)
+        .transform_filter("datum.ckpt_idx == ckpt_idx")
+        .mark_text(align="right", baseline="top", dx=-10, dy=28, fontSize=14, fontWeight="bold", color="black")
+        .encode(
+            x=alt.value(690),
+            y=alt.value(28),
+            text=alt.Text("kmeans_text:N"),
+        )
+    )
+
+    chart = points + accuracy_text + kmeans_text
 
     chart = chart.properties(
         width=700,
@@ -343,17 +382,6 @@ def interactive_tsne_with_images(
     random_seed: int = 42,
     overlay_scale: int = 8,
 ):
-    import base64
-    import io
-    from PIL import Image
-    import numpy as np
-    import pandas as pd
-    import altair as alt
-    import torch
-    from torch.utils.data import Subset
-    from sklearn.manifold import TSNE
-    from sklearn.cluster import k_means
-
     np.random.seed(random_seed)
     torch.manual_seed(random_seed)
     
@@ -388,7 +416,6 @@ def interactive_tsne_with_images(
     imgs = torch.stack(imgs, dim=0)
 
     def to_data_url(img_tensor, target_size=14):
-        # Denormalize
         img = img_tensor.clone() * 0.3081 + 0.1307
         img = torch.clamp(img, 0, 1)
         arr = (img.squeeze().numpy() * 255).astype(np.uint8)
@@ -400,17 +427,14 @@ def interactive_tsne_with_images(
 
     image_urls = [to_data_url(t, image_size) for t in imgs]
 
-    # Compute t-SNE (on subsampled embeddings)
     E = embeddings.detach().cpu().numpy() if torch.is_tensor(embeddings) else np.asarray(embeddings)
     if E.ndim == 2 and E.shape[1] > 2:
         tsne = TSNE(n_components=2, learning_rate="auto", random_state=random_seed).fit_transform(E)
     else:
         tsne = E
 
-    # Clusters in 2D space
     _, clusters, _ = k_means(tsne, n_clusters=10, n_init=5, random_state=random_seed)
 
-    # DataFrame for plotting
     y = labels.detach().cpu().numpy() if torch.is_tensor(labels) else np.asarray(labels)
     df = pd.DataFrame({
         "x": tsne[:, 0],
@@ -421,13 +445,10 @@ def interactive_tsne_with_images(
         "row_id": np.arange(len(tsne)),
     })
 
-    # Compute test accuracy (corner text on t-SNE panel)
     test_acc = get_test_accuracy(ckpt_path, _model, config_path)
 
-    # Altair config
     alt.data_transformers.disable_max_rows()
 
-    # Chart dimensions
     tsne_w, tsne_h = 700, 600
     panel_pad = 8
     panel_img_w = int(image_size * overlay_scale)
@@ -435,14 +456,13 @@ def interactive_tsne_with_images(
     panel_w = panel_img_w + 2 * panel_pad
     panel_h = panel_img_h + 2 * panel_pad
 
-    # Parameter: toggle color by cluster or label
+    # toggle color by cluster or label
     color_toggle = alt.param(
         name="color_by",
         value="cluster",
         bind=alt.binding_radio(options=["cluster", "label"], name="Color by: "),
     )
 
-    # Selection of nearest point on hover
     hover_sel = alt.selection_point(
         name="hover",
         on="mouseover",
@@ -451,7 +471,7 @@ def interactive_tsne_with_images(
         empty="none",
     )
 
-    # t-SNE points panel
+    # tsne points panel
     points = (
         alt.Chart(df)
         .mark_point(filled=True, opacity=0.75)
@@ -471,7 +491,7 @@ def interactive_tsne_with_images(
         .properties(width=tsne_w, height=tsne_h, title="t-SNE (val)")
     )
 
-    # Optional centroids on t-SNE
+    # optional centroids
     layers_tsne = [points]
     if show_centroids:
         cent = (
@@ -499,7 +519,7 @@ def interactive_tsne_with_images(
         )
         layers_tsne.append(centroid_layer)
 
-    # Corner test accuracy text on t-SNE panel (top-right)
+    # test accuracy
     accuracy_text = (
         alt.Chart(pd.DataFrame([{"test_accuracy": test_acc}]))
         .mark_text(
@@ -521,16 +541,10 @@ def interactive_tsne_with_images(
 
     tsne_panel = alt.layer(*layers_tsne).properties(width=tsne_w, height=tsne_h).interactive()
 
-    assume_center_anchor = True  # set to False if you still see a consistent offset
+    pos_x = panel_w / 2
+    pos_y = panel_h / 2
 
-    if assume_center_anchor:
-        pos_x = panel_w / 2
-        pos_y = panel_h / 2
-    else:
-        pos_x = (panel_w - panel_img_w) / 2
-        pos_y = (panel_h - panel_img_h) / 2
-
-    # Separate image panel (right side), centered image
+    # separate image panel
     image_panel = (
         alt.Chart(df)
         .transform_filter(hover_sel)
@@ -540,7 +554,7 @@ def interactive_tsne_with_images(
             x=alt.value(pos_x),
             y=alt.value(pos_y),
         )
-        .add_params(hover_sel)  # share the hover param with this panel
+        .add_params(hover_sel)
         .properties(width=panel_w, height=panel_h, title="Image")
     )
 
@@ -551,8 +565,6 @@ def interactive_tsne_with_images(
 
     return chart
 
-# ... existing code ...
-
 def interactive_tsne_over_PCAs(
     ckpt_dir: str,
     ckpt_file: str,
@@ -562,32 +574,28 @@ def interactive_tsne_over_PCAs(
     point_size: int = 25,
     save_html: str | None = None,
 ):
-    import numpy as np
-    import pandas as pd
-    import altair as alt
-    from sklearn.decomposition import PCA
 
     dfs = []
-    cum_explained = {}  # cumulative explained variance per PCA setting
-
+    cum_explained = {}
+    kmeans_acc_map = {}
+    
     ckpt_path = os.path.join(ckpt_dir, ckpt_file)
     embeddings, labels = embed_val_given_ckpt_path(ckpt_path, _model, config_path)
-
-    # Build one t-SNE per requested PCA dimensionality
+    
     for i, pc in enumerate(principal_components):
         pca = PCA(n_components=pc)
         down_sampled_embeddings = pca.fit_transform(embeddings)
 
-        # Use t-SNE if dimensionality > 2, otherwise plot directly
         if down_sampled_embeddings.shape[1] > 2:
             tsne = TSNE(n_components=2, learning_rate="auto").fit_transform(down_sampled_embeddings)
         else:
             tsne = down_sampled_embeddings
 
-        # Cluster in 2D space
         centroids, clusters, inertia = k_means(tsne, n_clusters=10, n_init=5)
+        
+        km_acc, _ = cluster_majority_vote_accuracy(labels, clusters)
+        kmeans_acc_map[i] = km_acc
 
-        # Store cumulative explained variance for this PCA
         cum_explained[i] = float(np.sum(pca.explained_variance_ratio_))
 
         X = np.asarray(tsne)
@@ -599,8 +607,8 @@ def interactive_tsne_over_PCAs(
             "y": X[:, 1],
             "cluster": c.astype(str),
             "label": y.astype(str),
-            "pcs": pc,            # the actual number of components used
-            "pcs_index": i,       # index used by the slider
+            "pcs": pc,
+            "pcs_index": i,
             "ckpt": ckpt_file,
         })
         dfs.append(df_i)
@@ -609,7 +617,6 @@ def interactive_tsne_over_PCAs(
 
     alt.data_transformers.disable_max_rows()
 
-    # Parameters: color toggle and PCA-index slider
     color_toggle = alt.param(
         name="color_by",
         value="cluster",
@@ -621,8 +628,7 @@ def interactive_tsne_over_PCAs(
         value=0,
         bind=alt.binding_range(min=0, max=len(principal_components) - 1, step=1, name="PCA k (index): "),
     )
-
-    # Points layer: color depends on toggle; filter depends on selected PCA index
+    
     points = (
         alt.Chart(df_all)
         .transform_calculate(
@@ -645,36 +651,36 @@ def interactive_tsne_over_PCAs(
         .add_params(color_toggle, pcs_index)
     )
 
-    # Corner text: cumulative explained variance for the selected PCA
-    ev_df = pd.DataFrame([
-        {"pcs_index": i, "pcs": principal_components[i], "cum_ev": cum_explained[i]}
+    overlay_df = pd.DataFrame([
+        {
+            "pcs_index": i,
+            "pcs": principal_components[i],
+            "kmeans_text": f"k-means acc: {kmeans_acc_map[i]:.2f}",
+            "ev_text": f"Expl. var: {cum_explained[i]*100:.1f}%",
+        }
         for i in range(len(principal_components))
     ])
 
-    ev_text = (
-        alt.Chart(ev_df)
+    kmeans_text = (
+        alt.Chart(overlay_df)
         .transform_filter("datum.pcs_index == pcs_index")
-        .mark_text(
-            align="right",
-            baseline="top",
-            dx=-10,
-            dy=10,
-            fontSize=14,
-            fontWeight="bold",
-            color="black",
-        )
-        .encode(
-            x=alt.value(690),
-            y=alt.value(10),
-            text=alt.Text("cum_ev:Q", format=".2%", title="Explained variance"),
-        )
+        .mark_text(align="right", baseline="top", dx=-10, dy=28, fontSize=14, fontWeight="bold", color="black")
+        .encode(x=alt.value(690), y=alt.value(28), text="kmeans_text:N")
         .add_params(pcs_index)
     )
 
-    chart = (points + ev_text).properties(
+    ev_text = (
+        alt.Chart(overlay_df)
+        .transform_filter("datum.pcs_index == pcs_index")
+        .mark_text(align="right", baseline="top", dx=-10, dy=46, fontSize=14, fontWeight="bold", color="black")
+        .encode(x=alt.value(690), y=alt.value(46), text="ev_text:N")
+        .add_params(pcs_index)
+    )
+
+    chart = (points + kmeans_text + ev_text).properties(
         width=700,
         height=600,
-        title=f"t-SNE with PCA downsampling ({_model}) – single checkpoint: {ckpt_file}",
+        title=f"t-SNE with PCA downsampling ({_model})",
     ).interactive()
 
     if save_html:

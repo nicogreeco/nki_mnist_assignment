@@ -15,7 +15,7 @@ def main(args):
     clf = LogisticRegression(
         random_state=0,
         n_jobs=4,
-        max_iter=1000,          # <- often needed for convergence
+        max_iter=1000,
     ).fit(X, y)
 
     
@@ -23,7 +23,7 @@ def main(args):
     
     print(f"Accuracy on validation set: {(y_pred == y).sum()/len(y)}")
     os.makedirs(os.path.dirname(args.out_path), exist_ok=True)
-    joblib.dump(clf, args.out_path)   # e.g., "models/logreg.joblib"
+    joblib.dump(clf, args.out_path)
     print(f"Saved classifier to: {args.out_path}")
 
 if __name__ == "__main__":
